@@ -70,7 +70,7 @@ else:
             if unique_file_id not in st.session_state.processed_keys:
                 scan_queue.append((unique_file_id, file))
 
-# 4. Core Automated Processing Engine (Fixed Rerun Logic)
+# 4. Core Automated Processing Engine
 if scan_queue:
     success_count = 0
     with st.spinner(f"AI is automatically extracting data..."):
@@ -116,14 +116,14 @@ if scan_queue:
                 expiration_string = parsed_json.get(
                     "expiration_date", "Unknown Expiration")
 
-             # Direct Database Insert (Matching your exact database columns)
+                # Direct Database Insert (Perfectly matched to your exact database schema)
                 supabase.table("inventory").insert({
                     "Medication": medication_title,
                     "Expiry Date": expiration_string,
                     "Status": "Verified ✅"
                 }).execute()
 
-    # Update UI cache tracking data list
+                # Update UI cache tracking data list safely with no cut-offs
                 st.session_state.inventory.append({
                     "Medication Name": medication_title,
                     "Expiration Date": expiration_string,
@@ -132,12 +132,10 @@ if scan_queue:
                 success_count += 1
 
             except Exception as error:
-                # FIX: Error message will now permanently stay visible on the screen
                 st.error(f"❌ Scan failed: {error}")
 
             st.session_state.processed_keys.add(processing_id)
 
-    # FIX: Only refresh the screen layout if an insertion was genuinely successful
     if success_count > 0:
         st.rerun()
 
