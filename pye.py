@@ -26,7 +26,7 @@ except Exception as e:
     st.error(f"Configuration Error: Missing Streamlit Secrets. Details: {e}")
     st.stop()
 
-# Helper function to calculate days remaining relative to current year 2026
+# Helper function to calculate days remaining
 
 
 def calculate_days(iso_date_str):
@@ -39,18 +39,16 @@ def calculate_days(iso_date_str):
     except:
         return 999
 
-# --- INITIAL HISTORICAL FETCH (Fixed Keyword Syntax) ---
+# Initial Historical Fetch Engine
 
 
 @st.cache_data(show_spinner="Syncing with cloud database...")
 def fetch_historical_inventory():
     try:
-        # Fixed: Changed ascending=False to desc=True to match native Supabase syntax
         response = supabase.table("inventory").select(
             "*").order("created_at", desc=True).execute()
         records = response.data if response.data else []
 
-        # Format the database rows cleanly for the UI application state
         formatted_list = []
         for row in records:
             iso_fallback = None
@@ -81,15 +79,15 @@ if "processed_keys" not in st.session_state:
     st.session_state.processed_keys = set()
 
 # 2. User Interface Layout
-st.set_page_config(page_title="RX-Expire Pro Dashboard",
+st.set_page_config(page_title="RX-Expire Ultimate Pro",
                    page_icon="🛡️", layout="centered")
 
-st.title("🛡️ RX-Expire Pro Dashboard")
+st.title("🛡️ RX-Expire Ultimate Pro")
 st.caption(
-    "Automated inventory tracking, smart expiration analysis, and live database sync.")
+    "Complete enterprise-grade automated pharmacy inventory tracking pipeline.")
 st.write("---")
 
-# Smart Expiration Alerts Panel
+# Expiration Risk Analysis Analytics
 st.subheader("🚨 Expiration Risk Analysis")
 if st.session_state.inventory:
     critical_count = 0
@@ -227,25 +225,24 @@ if scan_queue:
     progress_bar.empty()
 
     if success_count > 0:
-        st.cache_data.clear()  # Bust cache to force clean reload of fresh database entries
+        st.cache_data.clear()
         st.rerun()
 
 st.write("---")
 
-# 4. Live Interactive Data Editor (With Mobile Viewport Optimization Fixes)
+# 4. Live Interactive Data Editor
 st.subheader("📋 Active Inventory Log Batch")
 st.caption(
-    "💡 Double-click any text cell below to manually fix or edit details live.")
+    "💡 Double-click any cell below to update records live down to the cloud datastore.")
 
 if st.session_state.inventory:
     dataframe_view = pd.DataFrame(st.session_state.inventory)
 
-    # Custom column scaling configurations to stop mobile squishing
     edited_df = st.data_editor(
         dataframe_view,
         use_container_width=True,
         column_config={
-            "Database ID": None,  # Hides this column completely from the viewport screen
+            "Database ID": None,
             "Medication Name": st.column_config.TextColumn("Medication Name", width="medium", required=True),
             "Days Remaining": st.column_config.NumberColumn("Days Left", width="small", format="%d days"),
             "Expiration Date": st.column_config.TextColumn("Expiration", width="small"),
@@ -268,10 +265,25 @@ if st.session_state.inventory:
                     pass
         st.session_state.inventory = edited_df.to_dict(orient="records")
         st.cache_data.clear()
+
+    # --- PHASE 4 FEATURE: ONE-CLICK CSV EXPORT ENGINE ---
+    st.write("")
+    clean_export_df = dataframe_view.drop(
+        columns=["Database ID"], errors="ignore")
+    csv_data = clean_export_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label="📥 Export Full Inventory Log to CSV Spreadsheet",
+        data=csv_data,
+        file_name=f"rx_expire_inventory_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
 else:
     st.info("No scanned medications logged in this session yet.")
 
-# --- TARGETED INDIVIDUAL ROW DELETION CONTROLS ---
+# 5. Targeted Individual Row Deletion Controls
 if st.session_state.inventory:
     with st.expander("🔧 Advanced Inventory Management"):
         med_options = {f"{item['Medication Name']} ({item['Expiration Date']})": item['Database ID']
