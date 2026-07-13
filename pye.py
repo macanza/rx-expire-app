@@ -39,21 +39,20 @@ def calculate_days(iso_date_str):
     except:
         return 999
 
-# --- NEW PHASE 3 FEATURE: INITIAL HISTORICAL FETCH ---
+# --- INITIAL HISTORICAL FETCH (Fixed Keyword Syntax) ---
 
 
 @st.cache_data(show_spinner="Syncing with cloud database...")
 def fetch_historical_inventory():
     try:
+        # Fixed: Changed ascending=False to desc=True to match native Supabase syntax
         response = supabase.table("inventory").select(
-            "*").order("created_at", ascending=False).execute()
+            "*").order("created_at", desc=True).execute()
         records = response.data if response.data else []
 
         # Format the database rows cleanly for the UI application state
         formatted_list = []
         for row in records:
-            # Attempt to generate an ISO format string from the text date for calculation stability
-            # If the database string doesn't match standard patterns, fallback safely
             iso_fallback = None
             if row.get("Expiry Date") and "/" in row["Expiry Date"]:
                 parts = row["Expiry Date"].split("/")
@@ -241,12 +240,12 @@ st.caption(
 if st.session_state.inventory:
     dataframe_view = pd.DataFrame(st.session_state.inventory)
 
-    # PHASE 3: Custom column scaling configurations to stop mobile squishing
+    # Custom column scaling configurations to stop mobile squishing
     edited_df = st.data_editor(
         dataframe_view,
         use_container_width=True,
         column_config={
-            "Database ID": None,  # Hides this column completely from the mobile viewport screen!
+            "Database ID": None,  # Hides this column completely from the viewport screen
             "Medication Name": st.column_config.TextColumn("Medication Name", width="medium", required=True),
             "Days Remaining": st.column_config.NumberColumn("Days Left", width="small", format="%d days"),
             "Expiration Date": st.column_config.TextColumn("Expiration", width="small"),
@@ -272,7 +271,7 @@ if st.session_state.inventory:
 else:
     st.info("No scanned medications logged in this session yet.")
 
-# --- NEW PHASE 3 FEATURE: TARGETED INDIVIDUAL ROW DELETION CONTROLS ---
+# --- TARGETED INDIVIDUAL ROW DELETION CONTROLS ---
 if st.session_state.inventory:
     with st.expander("🔧 Advanced Inventory Management"):
         med_options = {f"{item['Medication Name']} ({item['Expiration Date']})": item['Database ID']
