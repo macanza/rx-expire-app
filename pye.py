@@ -1,68 +1,90 @@
 import streamlit as st
 import pandas as pd
+import json
+import base64
 from openai import OpenAI
 from supabase import create_client, Client
-import base64
-import json
 
-# # 1. Premium Page Configuration
-st.set_page_config(
-    page_title="RX-Expire MVP Dashboard",
-    page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# 1. Initialize API Clients Securely Using Streamlit Secrets
 
-# # 2. Initialize Session State Memory Loop
-# This creates a local temporary database array so items stack up on screen
+
+@st.cache_resource
+def init_connections():
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_KEY"]
+    openai_key = st.secrets["OPENAI_API_KEY"]
+
+    supabase_client = create_client(supabase_url, supabase_key)
+    openai_client = OpenAI(api_key=openai_key)
+    return supabase_client, openai_client
+
+
+try:
+    supabase, openai_client = init_connections()
+except Exception as e:
+    st.error(f"Configuration Error: Missing Streamlit Secrets. Details: {e}")
+    st.stop()
+
+# 2. Setup Persistent Session States
 if "inventory" not in st.session_state:
     st.session_state.inventory = []
+if "processed_keys" not in st.session_state:
+    st.session_state.processed_keys = set()
 
-# Title and App Sub-headings
+# 3. User Interface Layout
+st.set_page_config(page_title="RX-Expire Dashboard",
+                   page_icon="🛡️", layout="centered")
+
 st.title("🛡️ RX-Expire MVP Dashboard")
-st.markdown(
+st.caption(
     "Scan medication labels to extract expiration dates and log inventory automatically.")
+st.write("---")
 
-# Sidebar status tool
-with st.sidebar:
-    st.header("⚙️ System Status")
-    # Grabs the new API key you just securely updated in your secrets.toml file
-    openai_key = st.secrets.get("OPENAI_API_KEY", "")
-    if openai_key:
-        st.success("OpenAI Key: Loaded & Secure 🔐")
-    else:
-        st.error("OpenAI Key: Missing in secrets.toml ⚠️")
-
-# # 3. User Interface: Camera and File Upload Layout
-st.markdown("---")
 st.subheader("📸 Label Scanner Panel")
 
-# Gives the pharmacist the ability to flip between a laptop webcam or an upload box
-use_live_camera = st.checkbox("Toggle Live Webcam Mode")
+# Solution: Webcam mode is now selected by default (index=0)
+input_mode = st.radio(
+    "Select Scanner Input Method:",
+    ["📷 Live Webcam Mode", "📁 Bulk Image Upload Mode"],
+    index=0
+)
 
-if use_live_camera:
-    uploaded_image = st.camera_input(
-        "Position the bottle label clearly inside the viewfinder frame")
+# Accumulator list for images waiting to be scanned
+scan_queue = []
+
+if input_mode == "📷 Live Webcam Mode":
+    webcam_file = st.camera_input(
+        "Position the medication label clearly in front of the camera")
+    if webcam_file:
+        # Create a unique tracking key for the snapshot based on its file size
+        snapshot_id = f"webcam_{webcam_file.size}"
+        if snapshot_id not in st.session_state.processed_keys:
+            scan_queue.append((snapshot_id, webcam_file))
+
 else:
-    uploaded_image = st.file_uploader(
-        "Drop a snapshot file of the label here", type=["jpg", "jpeg", "png"])
+    # Solution: Enabled bulk uploads (accept_multiple_files=True)
+    uploaded_files = st.file_uploader(
+        "Drop snapshot files of your medication labels here",
+        type=["jpg", "png", "jpeg", "webp"],
+        accept_multiple_files=True
+    )
+    if uploaded_files:
+        for file in uploaded_files:
+            unique_file_id = f"{file.name}_{file.size}"
+            if unique_file_id not in st.session_state.processed_keys:
+                scan_queue.append((unique_file_id, file))
 
-# # 4. Processing Pipeline: OpenAI Vision Call
-if uploaded_image is not None:
-    st.image(uploaded_image, caption="Current Uploaded Target Label", width=320)
-
-    if st.button("🔍 Run AI Vision Analysis"):
-        with st.spinner("Analyzing text layout and extracting dates..."):
+# 4. Core Automated Processing Engine (No click button required)
+if scan_queue:
+    with st.spinner(f"AI is automatically extracting data from {len(scan_queue)} label(s)..."):
+        for processing_id, image_data in scan_queue:
             try:
-                # Convert the image file bytes to a base64 text string for the API call
-                image_bytes = uploaded_image.getvalue()
-                base64_image = base64.b64encode(image_bytes).decode("utf-8")
+                # Convert raw image bytes to Base64 format for OpenAI Vision API
+                raw_bytes = image_data.getvalue()
+                base64_encoded = base64.b64encode(raw_bytes).decode("utf-8")
 
-                # Fire up the OpenAI engine using your secure environment variable
-                client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
-                # Process the image label using the primary multimodality model
-                response = client.chat.completions.create(
+                # Contact OpenAI Vision Engine
+                response = openai_client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
                         {
@@ -70,71 +92,75 @@ if uploaded_image is not None:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": "Identify the main medication name and the expiration date on this label. Return the answer ONLY as a clean JSON object containing keys 'medication_name' and 'expiration_date'. Do not wrap the code block in markdown backticks."
+                                    "text": (
+                                        "Analyze this medicine label image. Return a raw JSON object containing "
+                                        "exactly two keys: 'medication_name' (string value matching the brand/generic name) "
+                                        "and 'expiration_date' (string value matching the expiration sequence exactly as "
+                                        "printed, e.g., 2025MAR23). Do not format output with markdown backticks or block wrappers."
+                                    )
                                 },
                                 {
                                     "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{base64_image}"
-                                    }
+                                    "image_url": {"url": f"data:image/jpeg;base64,{base64_encoded}"}
                                 }
                             ]
                         }
-                    ],
-                    max_tokens=250
+                    ]
                 )
 
-                # Parse out raw JSON text safely into Python data structures
-                raw_json = response.choices[0].message.content.strip()
-                parsed_data = json.loads(raw_json)
+                # Extract and clean raw response text strings safely
+                raw_output = response.choices[0].message.content.strip()
+                if raw_output.startswith("```json"):
+                    raw_output = raw_output.replace(
+                        "```json", "").replace("```", "").strip()
+                elif raw_output.startswith("```"):
+                    raw_output = raw_output.replace("```", "").strip()
 
-                # Store the extracted items inside temporary variables
-                st.session_state["temp_med"] = parsed_data.get(
-                    "medication_name", "Unknown Label")
-                st.session_state["temp_exp"] = parsed_data.get(
-                    "expiration_date", "YYYY-MM-DD")
-                st.success("Extraction Completed Successfully!")
+                # Defend against NoneType/Parsing crashes with safe falls
+                parsed_json = json.loads(raw_output)
+                medication_title = parsed_json.get(
+                    "medication_name", "Unknown Medication")
+                expiration_string = parsed_json.get(
+                    "expiration_date", "Unknown Expiration")
 
-            except Exception as error_msg:
-                st.error(f"System connection failure: {error_msg}")
-                # Fallback data simulation so you can continue testing layouts if API limits hit
-                st.session_state["temp_med"] = "Fallback Sample Med 500mg"
-                st.session_state["temp_exp"] = "2028-12-31"
+                # Direct Database Insert (Fires seamlessly through your newly created Supabase Policy)
+                supabase.table("inventory").insert({
+                    "medication_name": medication_title,
+                    "expiration_date": expiration_string,
+                    "verification_check": "Verified ✅"
+                }).execute()
 
-# # 5. Data Adjustments & Verification UI
-if "temp_med" in st.session_state:
-    st.markdown("---")
-    st.subheader("🎯 Pharmacist Verification Review")
-    st.info(
-        "Verify or adjust details manually before pushing data to the inventory logs.")
+                # Update UI cache tracking data list
+                st.session_state.inventory.append({
+                    "Medication Name": medication_title,
+                    "Expiration Date": expiration_string,
+                    "Verification Check": "Verified ✅"
+                })
 
-    col1, col2 = st.columns(2)
-    with col1:
-        confirmed_med = st.text_input(
-            "Verified Med Title:", value=st.session_state["temp_med"])
-    with col2:
-        confirmed_exp = st.text_input(
-            "Verified Expiration String:", value=st.session_state["temp_exp"])
+            except Exception as error:
+                st.error(
+                    f"Skipped an image due to processing exception: {error}")
 
-    # Append the review row directly to the running tracking list when triggered
-    if st.button("📥 Commit Entry to Inventory Log"):
-        st.session_state.inventory.append({
-            "Medication Name": confirmed_med,
-            "Expiration Date": confirmed_exp,
-            "Verification Check": "Verified ✅"
-        })
-        st.toast(f"Logged {confirmed_med} successfully!")
+            # Lock the key inside the set memory tracking loop to prevent infinite API multi-calls
+            st.session_state.processed_keys.add(processing_id)
 
-# # 6. Dynamic Visual Live Inventory Grid Display
+    # Force a UI layout redraw to present new database rows instantly
+    st.rerun()
+
+st.write("---")
+
+# 5. Live Verification Log Display Panel
+st.subheader("📋 Active Inventory Log Batch")
+
 if st.session_state.inventory:
-    st.markdown("---")
-    st.subheader("📋 Active Inventory Log Batch")
+    dataframe_view = pd.DataFrame(st.session_state.inventory)
+    st.dataframe(dataframe_view, use_container_width=True)
+else:
+    st.info("No scanned medications logged in this session yet. Ready for tracking data inputs.")
 
-    # Render the array list structure into a visual interactive table frame
-    inventory_dataframe = pd.DataFrame(st.session_state.inventory)
-    st.dataframe(inventory_dataframe, use_container_width=True)
-
-    # Allow resetting the current working batch session array cleanly
-    if st.button("🗑️ Purge Current Batch"):
+# Batch Purge Command Controls
+if st.session_state.inventory:
+    if st.button("🗑️ Purge Current Session Logs"):
         st.session_state.inventory = []
+        st.session_state.processed_keys.clear()
         st.rerun()
