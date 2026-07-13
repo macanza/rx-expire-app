@@ -41,7 +41,7 @@ st.caption(
     "Automated inventory tracking, smart expiration analysis, and live database sync.")
 st.write("---")
 
-# --- FEATURE 1: SMART EXPIRATION ALERTS PANEL ---
+# Smart Expiration Alerts Panel
 st.subheader("🚨 Expiration Risk Analysis")
 if st.session_state.inventory:
     critical_count = 0
@@ -95,12 +95,11 @@ else:
             if unique_file_id not in st.session_state.processed_keys:
                 scan_queue.append((unique_file_id, file))
 
-# 4. Core Automated Processing Engine (With Bulk Upload Enhancements)
+# 4. Core Automated Processing Engine
 if scan_queue:
     success_count = 0
     total_files = len(scan_queue)
 
-    # FEATURE 2: BULK UPLOAD PROGRESS TRACKING
     progress_bar = st.progress(0.0)
     status_text = st.empty()
 
@@ -132,8 +131,8 @@ if scan_queue:
                                 "image_url": {"url": f"data:image/jpeg;base64,{base64_encoded}"}
                             }
                         ]
-                    ]
-                )
+                    }
+                ]
             )
 
             raw_output = response.choices[0].message.content.strip()
@@ -149,7 +148,7 @@ if scan_queue:
                 "expiration_date", "Unknown Expiration")
             iso_date_str = parsed_json.get("iso_date", None)
 
-            # Smart Date Math Engine
+            # Smart Date Math Engine (Targeting Current Year 2026)
             days_remaining = 999
             if iso_date_str:
                 try:
@@ -160,7 +159,7 @@ if scan_queue:
                 except:
                     pass
 
-            # Direct Database Insert
+            # Direct Database Insert (Matching your exact database columns)
             supabase.table("inventory").insert({
                 "Medication": medication_title if medication_title else "Pending Override",
                 "Expiry Date": expiration_string,
@@ -189,14 +188,13 @@ if scan_queue:
 
 st.write("---")
 
-# 5. FEATURE 3: LIVE INTERACTIVE DATA EDITOR (Manual Override Fallback)
+# 5. Live Interactive Data Editor (Manual Override Fallback)
 st.subheader("📋 Active Inventory Log Batch")
 st.caption("💡 Double-click any empty text cell below to manually add or edit medication details on the fly.")
 
 if st.session_state.inventory:
     dataframe_view = pd.DataFrame(st.session_state.inventory)
 
-    # Swapped from st.dataframe to st.data_editor to allow manual overrides live
     edited_df = st.data_editor(
         dataframe_view,
         use_container_width=True,
@@ -206,7 +204,6 @@ if st.session_state.inventory:
         }
     )
 
-    # Sync visual alterations back into the persistent session tracking arrays
     st.session_state.inventory = edited_df.to_dict(orient="records")
 else:
     st.info("No scanned medications logged in this session yet. Ready for tracking data inputs.")
