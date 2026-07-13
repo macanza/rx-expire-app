@@ -116,13 +116,14 @@ if scan_queue:
                 expiration_string = parsed_json.get(
                     "expiration_date", "Unknown Expiration")
 
-                # Direct Database Insert
+             # Direct Database Insert (Matching your exact database columns)
                 supabase.table("inventory").insert({
-                    "medication_name": medication_title,
-                    "expiration_date": expiration_string,
-                    "verification_check": "Verified ✅"
+                    "Medication": medication_title,
+                    "Expiry Date": expiration_string,
+                    "Status": "Verified ✅"
                 }).execute()
 
+    # Update UI cache tracking data list
                 st.session_state.inventory.append({
                     "Medication Name": medication_title,
                     "Expiration Date": expiration_string,
