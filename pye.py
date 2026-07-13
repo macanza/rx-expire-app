@@ -26,13 +26,62 @@ except Exception as e:
     st.error(f"Configuration Error: Missing Streamlit Secrets. Details: {e}")
     st.stop()
 
-# 2. Setup Persistent Session States
+# Helper function to calculate days remaining relative to current year 2026
+
+
+def calculate_days(iso_date_str):
+    if not iso_date_str:
+        return 999
+    try:
+        target_date = datetime.strptime(iso_date_str, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        return (target_date - today).days
+    except:
+        return 999
+
+# --- NEW PHASE 3 FEATURE: INITIAL HISTORICAL FETCH ---
+
+
+@st.cache_data(show_spinner="Syncing with cloud database...")
+def fetch_historical_inventory():
+    try:
+        response = supabase.table("inventory").select(
+            "*").order("created_at", ascending=False).execute()
+        records = response.data if response.data else []
+
+        # Format the database rows cleanly for the UI application state
+        formatted_list = []
+        for row in records:
+            # Attempt to generate an ISO format string from the text date for calculation stability
+            # If the database string doesn't match standard patterns, fallback safely
+            iso_fallback = None
+            if row.get("Expiry Date") and "/" in row["Expiry Date"]:
+                parts = row["Expiry Date"].split("/")
+                if len(parts) == 2:  # MM/YYYY format
+                    iso_fallback = f"{parts[1]}-{parts[0]}-28"
+
+            days = calculate_days(iso_fallback)
+
+            formatted_list.append({
+                "Database ID": row.get("id"),
+                "Medication Name": row.get("Medication", "Unknown"),
+                "Expiration Date": row.get("Expiry Date", "Unknown"),
+                "Days Remaining": days,
+                "Verification Check": row.get("Status", "Verified ✅")
+            })
+        return formatted_list
+    except Exception as e:
+        st.error(f"Failed to load cloud history: {e}")
+        return []
+
+
+# Initialize session state tracking
 if "inventory" not in st.session_state:
-    st.session_state.inventory = []
+    st.session_state.inventory = fetch_historical_inventory()
 if "processed_keys" not in st.session_state:
     st.session_state.processed_keys = set()
 
-# 3. User Interface Layout
+# 2. User Interface Layout
 st.set_page_config(page_title="RX-Expire Pro Dashboard",
                    page_icon="🛡️", layout="centered")
 
@@ -95,7 +144,7 @@ else:
             if unique_file_id not in st.session_state.processed_keys:
                 scan_queue.append((unique_file_id, file))
 
-# 4. Core Automated Processing Engine
+# 3. Core Automated Processing Engine
 if scan_queue:
     success_count = 0
     total_files = len(scan_queue)
@@ -148,25 +197,20 @@ if scan_queue:
                 "expiration_date", "Unknown Expiration")
             iso_date_str = parsed_json.get("iso_date", None)
 
-            # Smart Date Math Engine (Targeting Current Year 2026)
-            days_remaining = 999
-            if iso_date_str:
-                try:
-                    target_date = datetime.strptime(
-                        iso_date_str, "%Y-%m-%d").date()
-                    today = datetime.now().date()
-                    days_remaining = (target_date - today).days
-                except:
-                    pass
+            days_remaining = calculate_days(iso_date_str)
 
-            # Direct Database Insert (Matching your exact database columns)
-            supabase.table("inventory").insert({
+            # Direct Database Insert
+            db_response = supabase.table("inventory").insert({
                 "Medication": medication_title if medication_title else "Pending Override",
                 "Expiry Date": expiration_string,
                 "Status": "Verified ✅"
             }).execute()
 
-            st.session_state.inventory.append({
+            new_row_id = db_response.data[0].get(
+                "id") if db_response.data else None
+
+            st.session_state.inventory.insert(0, {
+                "Database ID": new_row_id,
                 "Medication Name": medication_title,
                 "Expiration Date": expiration_string,
                 "Days Remaining": days_remaining,
@@ -184,32 +228,76 @@ if scan_queue:
     progress_bar.empty()
 
     if success_count > 0:
+        st.cache_data.clear()  # Bust cache to force clean reload of fresh database entries
         st.rerun()
 
 st.write("---")
 
-# 5. Live Interactive Data Editor (Manual Override Fallback)
+# 4. Live Interactive Data Editor (With Mobile Viewport Optimization Fixes)
 st.subheader("📋 Active Inventory Log Batch")
-st.caption("💡 Double-click any empty text cell below to manually add or edit medication details on the fly.")
+st.caption(
+    "💡 Double-click any text cell below to manually fix or edit details live.")
 
 if st.session_state.inventory:
     dataframe_view = pd.DataFrame(st.session_state.inventory)
 
+    # PHASE 3: Custom column scaling configurations to stop mobile squishing
     edited_df = st.data_editor(
         dataframe_view,
         use_container_width=True,
         column_config={
-            "Days Remaining": st.column_config.NumberColumn("Days Left", format="%d days"),
-            "Verification Check": st.column_config.SelectboxColumn("Status", options=["Verified ✅", "Flagged ⚠️"])
+            "Database ID": None,  # Hides this column completely from the mobile viewport screen!
+            "Medication Name": st.column_config.TextColumn("Medication Name", width="medium", required=True),
+            "Days Remaining": st.column_config.NumberColumn("Days Left", width="small", format="%d days"),
+            "Expiration Date": st.column_config.TextColumn("Expiration", width="small"),
+            "Verification Check": st.column_config.SelectboxColumn("Status", width="small", options=["Verified ✅", "Flagged ⚠️"])
         }
     )
 
-    st.session_state.inventory = edited_df.to_dict(orient="records")
+    # Process modifications back up to Supabase live if a cell changes
+    if not edited_df.equals(dataframe_view):
+        for idx, row in edited_df.iterrows():
+            db_id = row.get("Database ID")
+            if db_id:
+                try:
+                    supabase.table("inventory").update({
+                        "Medication": row.get("Medication Name"),
+                        "Expiry Date": row.get("Expiration Date"),
+                        "Status": row.get("Verification Check")
+                    }).eq("id", db_id).execute()
+                except:
+                    pass
+        st.session_state.inventory = edited_df.to_dict(orient="records")
+        st.cache_data.clear()
 else:
-    st.info("No scanned medications logged in this session yet. Ready for tracking data inputs.")
+    st.info("No scanned medications logged in this session yet.")
 
+# --- NEW PHASE 3 FEATURE: TARGETED INDIVIDUAL ROW DELETION CONTROLS ---
 if st.session_state.inventory:
-    if st.button("🗑️ Purge Current Session Logs"):
-        st.session_state.inventory = []
-        st.session_state.processed_keys.clear()
-        st.rerun()
+    with st.expander("🔧 Advanced Inventory Management"):
+        med_options = {f"{item['Medication Name']} ({item['Expiration Date']})": item['Database ID']
+                       for item in st.session_state.inventory if item['Database ID']}
+
+        if med_options:
+            selected_med = st.selectbox(
+                "Select an entry to permanently remove:", options=list(med_options.keys()))
+            if st.button("🗑️ Delete Selected Entry", type="primary"):
+                target_id = med_options[selected_med]
+                try:
+                    supabase.table("inventory").delete().eq(
+                        "id", target_id).execute()
+                    st.success(
+                        "Entry removed successfully from cloud storage!")
+                    st.cache_data.clear()
+                    st.session_state.inventory = [
+                        i for i in st.session_state.inventory if i['Database ID'] != target_id]
+                    st.rerun()
+                except Exception as delete_error:
+                    st.error(f"Deletion failed: {delete_error}")
+
+        st.write("---")
+        if st.button("🚨 Purge All Session Local Caches"):
+            st.session_state.inventory = []
+            st.session_state.processed_keys.clear()
+            st.cache_data.clear()
+            st.rerun()
