@@ -42,27 +42,23 @@ st.write("---")
 
 st.subheader("📸 Label Scanner Panel")
 
-# Solution: Webcam mode is now selected by default (index=0)
 input_mode = st.radio(
     "Select Scanner Input Method:",
     ["📷 Live Webcam Mode", "📁 Bulk Image Upload Mode"],
     index=0
 )
 
-# Accumulator list for images waiting to be scanned
 scan_queue = []
 
 if input_mode == "📷 Live Webcam Mode":
     webcam_file = st.camera_input(
         "Position the medication label clearly in front of the camera")
     if webcam_file:
-        # Create a unique tracking key for the snapshot based on its file size
         snapshot_id = f"webcam_{webcam_file.size}"
         if snapshot_id not in st.session_state.processed_keys:
             scan_queue.append((snapshot_id, webcam_file))
 
 else:
-    # Solution: Enabled bulk uploads (accept_multiple_files=True)
     uploaded_files = st.file_uploader(
         "Drop snapshot files of your medication labels here",
         type=["jpg", "png", "jpeg", "webp"],
@@ -74,16 +70,15 @@ else:
             if unique_file_id not in st.session_state.processed_keys:
                 scan_queue.append((unique_file_id, file))
 
-# 4. Core Automated Processing Engine (No click button required)
+# 4. Core Automated Processing Engine (Fixed Rerun Logic)
 if scan_queue:
-    with st.spinner(f"AI is automatically extracting data from {len(scan_queue)} label(s)..."):
+    success_count = 0
+    with st.spinner(f"AI is automatically extracting data..."):
         for processing_id, image_data in scan_queue:
             try:
-                # Convert raw image bytes to Base64 format for OpenAI Vision API
                 raw_bytes = image_data.getvalue()
                 base64_encoded = base64.b64encode(raw_bytes).decode("utf-8")
 
-                # Contact OpenAI Vision Engine
                 response = openai_client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
@@ -108,7 +103,6 @@ if scan_queue:
                     ]
                 )
 
-                # Extract and clean raw response text strings safely
                 raw_output = response.choices[0].message.content.strip()
                 if raw_output.startswith("```json"):
                     raw_output = raw_output.replace(
@@ -116,36 +110,35 @@ if scan_queue:
                 elif raw_output.startswith("```"):
                     raw_output = raw_output.replace("```", "").strip()
 
-                # Defend against NoneType/Parsing crashes with safe falls
                 parsed_json = json.loads(raw_output)
                 medication_title = parsed_json.get(
                     "medication_name", "Unknown Medication")
                 expiration_string = parsed_json.get(
                     "expiration_date", "Unknown Expiration")
 
-                # Direct Database Insert (Fires seamlessly through your newly created Supabase Policy)
+                # Direct Database Insert
                 supabase.table("inventory").insert({
                     "medication_name": medication_title,
                     "expiration_date": expiration_string,
                     "verification_check": "Verified ✅"
                 }).execute()
 
-                # Update UI cache tracking data list
                 st.session_state.inventory.append({
                     "Medication Name": medication_title,
                     "Expiration Date": expiration_string,
                     "Verification Check": "Verified ✅"
                 })
+                success_count += 1
 
             except Exception as error:
-                st.error(
-                    f"Skipped an image due to processing exception: {error}")
+                # FIX: Error message will now permanently stay visible on the screen
+                st.error(f"❌ Scan failed: {error}")
 
-            # Lock the key inside the set memory tracking loop to prevent infinite API multi-calls
             st.session_state.processed_keys.add(processing_id)
 
-    # Force a UI layout redraw to present new database rows instantly
-    st.rerun()
+    # FIX: Only refresh the screen layout if an insertion was genuinely successful
+    if success_count > 0:
+        st.rerun()
 
 st.write("---")
 
@@ -158,7 +151,6 @@ if st.session_state.inventory:
 else:
     st.info("No scanned medications logged in this session yet. Ready for tracking data inputs.")
 
-# Batch Purge Command Controls
 if st.session_state.inventory:
     if st.button("🗑️ Purge Current Session Logs"):
         st.session_state.inventory = []
